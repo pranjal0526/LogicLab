@@ -1,26 +1,50 @@
-import Database from 'better-sqlite3';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { MongoClient } from 'mongodb';
 import { GATES } from './logic.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const databasePath = process.env.DATABASE_PATH || path.join(__dirname, '../data/logiclab.db');
-const db = new Database(databasePath);
-db.pragma('journal_mode = WAL');
+const databaseName = process.env.MONGODB_DB_NAME || 'logiclab';
+let client;
+let databasePromise;
+let seedPromise;
 
-export function initializeDatabase() {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS gates (
-      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
-      boolean_expression TEXT NOT NULL, type TEXT NOT NULL, application TEXT NOT NULL
-    );
-  `);
-  const gateCount = db.prepare('SELECT COUNT(*) AS count FROM gates').get().count;
-  if (!gateCount) {
-    const addGate = db.prepare('INSERT INTO gates (id, name, description, boolean_expression, type, application) VALUES (?, ?, ?, ?, ?, ?)');
-    const insertGates = db.transaction(() => GATES.forEach((gate) => addGate.run(gate.id, gate.name, gate.description, gate.expression, gate.type, gate.application)));
-    insertGates();
+async function connectToDatabase() {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) {
+    throw new Error('MONGODB_URI is not configured. Add it to backend/.env locally or to Vercel Environment Variables.');
   }
+
+  if (!databasePromise) {
+    client = new MongoClient(uri, { maxPoolSize: 10 });
+    databasePromise = client.connect()
+      .then(() => client.db(databaseName))
+      .catch(async (error) => {
+        databasePromise = undefined;
+        const failedClient = client;
+        client = undefined;
+        await failedClient?.close().catch(() => {});
+        throw error;
+      });
+  }
+
+  return databasePromise;
 }
 
-export default db;
+export async function getGatesCollection() {
+  const database = await connectToDatabase();
+  const collection = database.collection('gates');
+
+  if (!seedPromise) {
+    seedPromise = collection.bulkWrite(GATES.map((gate, order) => ({
+      updateOne: {
+        filter: { id: gate.id },
+        update: { $set: { ...gate, order } },
+        upsert: true
+      }
+    }))).catch((error) => {
+      seedPromise = undefined;
+      throw error;
+    });
+  }
+
+  await seedPromise;
+  return collection;
+}
