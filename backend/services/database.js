@@ -9,7 +9,7 @@ let seedPromise;
 async function connectToDatabase() {
   const uri = process.env.MONGODB_URI;
   if (!uri) {
-    throw new Error('MONGODB_URI is not configured. Add it to backend/.env locally or to Vercel Environment Variables.');
+    throw new Error('MONGODB_URI is not configured.');
   }
 
   if (!databasePromise) {
